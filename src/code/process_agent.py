@@ -8,21 +8,16 @@ from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-
-
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_mcp_adapters.client import MultiServerMCPClient
+import asyncio
 load_dotenv()
-
-# -----------------------------
-# STATE MODEL
-# -----------------------------
 
 class ProcessAgent(BaseModel):
     user_message: str
     sentiment: Literal["info", "action", "summary"] | None = None
 
-parser = PydanticOutputParser(
-    pydantic_object=ProcessAgent
-)
+parser = PydanticOutputParser(pydantic_object=ProcessAgent)
 # -----------------------------
 # LLM
 # -----------------------------
@@ -32,9 +27,7 @@ hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 llm = HuggingFaceEndpoint(
     repo_id="meta-llama/Llama-3.3-70B-Instruct",
     task="text-generation",
-    huggingfacehub_api_token=os.getenv(
-        "HUGGINGFACEHUB_API_TOKEN"
-    ),
+    huggingfacehub_api_token=hf_token,
     max_new_tokens=256,
     temperature=0.1,
 )
@@ -49,72 +42,26 @@ chat_model = ChatHuggingFace(llm=llm)
 # -------------------------------------------------
 
 prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-        You are a classifier.
-
-        Return valid JSON only.
-
-        {format_instructions}
-        """
+    SystemMessagePromptTemplate.from_template(
+        "You are a classifier. Return valid JSON only.\n{format_instructions}"
     ),
-    (
-        "human",
-        "{message}"
-    )
-])
-
+    HumanMessagePromptTemplate.from_template("{message}")
+]).partial(format_instructions=parser.get_format_instructions())
 
 # -------------------------------------------------
 # CHAIN
 # -------------------------------------------------
 
-chain = (
-    prompt.partial(
-        format_instructions=parser.get_format_instructions()
-    )
-    | chat_model
-    | parser
-)
+chain = prompt | chat_model  | parser
 
-# -----------------------------
-# NODE
-# -----------------------------
-
-def check_sentiment(state: dict):
-
-    response = chain.invoke({
-        "message": state["user_message"]
-    })
-
-    return {
-        "user_message": response.user_message,
-        "sentiment": response.sentiment
-    }
-
-
-# -------------------------------------------------
-# GRAPH
-# -------------------------------------------------
-
-graph = StateGraph(dict)
-
-graph.add_node("check_sentiment", check_sentiment)
-
-graph.add_edge(START, "check_sentiment")
-graph.add_edge("check_sentiment", END)
-
-workflow = graph.compile()
 
 # -------------------------------------------------
 # RUN
 # -------------------------------------------------
-
 input_text = input("Enter your message: ")
 
-result = workflow.invoke({
-    "user_message": input_text
+result = chain.invoke({
+    "message": input_text
 })
 
-print("Result:", result)
+print("Sentiment:", result.sentiment)
